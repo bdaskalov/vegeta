@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"math/rand"
 )
 
 // Attacker is an attack executor which wraps an http.Client
@@ -126,12 +127,25 @@ func TLSConfig(c *tls.Config) func(*Attacker) {
 	}
 }
 
+func NewExponentialTicker(rate float64) <-chan time.Time {
+  c := make(chan time.Time, 1)
+  go func(c chan time.Time, rate float64) {
+  		r := rand.New(rand.NewSource(time.Now().UnixNano()))
+      for ;; {
+        duration := time.Duration(r.ExpFloat64() * (1e9 / rate)) * time.Nanosecond
+        time.Sleep(duration)
+        c <- time.Now()
+      }
+    }(c, rate)
+  return c
+}
 // Attack reads its Targets from the passed Targeter and attacks them at
 // the rate specified for duration time. Results are put into the returned channel
 // as soon as they arrive.
 func (a *Attacker) Attack(tr Targeter, rate uint64, du time.Duration) chan *Result {
 	resc := make(chan *Result)
-	throttle := time.NewTicker(time.Duration(1e9 / rate))
+	// throttle := time.NewTicker(time.Duration(1e9 / rate))
+	throttle := NewExponentialTicker(float64(rate))
 	hits := rate * uint64(du.Seconds())
 	wrk := a.workers
 	if wrk == 0 || wrk > hits {
@@ -146,7 +160,8 @@ func (a *Attacker) Attack(tr Targeter, rate uint64, du time.Duration) chan *Resu
 			defer wg.Done()
 			for j := uint64(0); j < share; j++ {
 				select {
-				case tm := <-throttle.C:
+				// case tm := <-throttle.C:
+				case tm := <-throttle:
 					resc <- a.hit(tr, tm)
 				case <-a.stop:
 					return
@@ -158,7 +173,7 @@ func (a *Attacker) Attack(tr Targeter, rate uint64, du time.Duration) chan *Resu
 	go func() {
 		wg.Wait()
 		close(resc)
-		throttle.Stop()
+		//throttle.Stop()
 	}()
 
 	return resc
